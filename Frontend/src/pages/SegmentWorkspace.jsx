@@ -1,465 +1,565 @@
 // Frontend/src/pages/SegmentWorkspace.jsx
-// Redesigned to match Figma: transcript + steps side by side, bottom audio player
+// Left panel = extracted instruction chunks only (not full raw transcription)
 
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
-  Play, Pause, ChevronLeft, ChevronRight, Download, Shuffle, Repeat,
-  Search, Loader2, AlertCircle, SkipBack, SkipForward,
+  ChevronLeft, Download, Search, Play, Pause,
+  Shuffle, SkipBack, SkipForward, Repeat, Loader2, AlertCircle,
+  ListMusic, Volume2, Maximize2, VolumeX, Minimize2
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import apiService from '../services/api';
 
-// ── Waveform bars ─────────────────────────────────────────────────────────────
-const WaveformBars = ({ playing }) => {
-  const bars = Array.from({ length: 28 }, (_, i) => i);
-  return (
-    <div className="flex items-center gap-[2px] h-10">
-      {bars.map(i => (
-        <div
-          key={i}
-          style={{
-            height: `${20 + Math.sin(i * 0.7) * 12}px`,
-            animationDelay: `${(i * 60) % 500}ms`,
-            animationDuration: `${600 + (i * 37) % 400}ms`,
-          }}
-          className={`w-1 rounded-full bg-gray-600 ${playing ? 'animate-bar' : ''}`}
-        />
-      ))}
-      <style>{`
-        @keyframes bar {
-          0%,100% { transform: scaleY(1); }
-          50%      { transform: scaleY(1.8); }
-        }
-        .animate-bar { animation: bar ease-in-out infinite; }
-      `}</style>
-    </div>
-  );
-};
+/* ── Inject Inter font once ──────────────────────────────────────────────── */
+function injectFont() {
+  if (document.getElementById('sw-font')) return;
+  const s = document.createElement('style');
+  s.id = 'sw-font';
+  s.textContent = `@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');`;
+  document.head.appendChild(s);
+}
 
-// ── Audio error helper ────────────────────────────────────────────────────────
-const getAudioErrorMsg = (code) => ({
-  1: 'Aborted', 2: 'Network error', 3: 'Decode error', 4: 'Source not supported',
-}[code] || 'Unknown error');
+/* ── Animated waveform bars ──────────────────────────────────────────────── */
+const HEIGHTS = [14,18,22,28,32,26,20,30,36,28,22,18,26,32,36,30,22,28,34,26,20,16,24,30,26,20,16,22];
+const WaveBars = ({ playing }) => (
+  <div style={{ display:'flex', alignItems:'center', gap:'2px', height:'36px' }}>
+    <style>{`
+      @keyframes sw-bar{0%,100%{transform:scaleY(1)}50%{transform:scaleY(1.9)}}
+      .sw-bar-anim{animation:sw-bar ease-in-out infinite}
+      @keyframes sw-spin{to{transform:rotate(360deg)}}
+    `}</style>
+    {HEIGHTS.map((h, i) => (
+      <div key={i}
+        className={playing ? 'sw-bar-anim' : ''}
+        style={{
+          width:'2.5px', height:`${h*0.8}px`, borderRadius:'2px',
+          backgroundColor:'#475569',
+          animationDuration:`${550+(i*47)%400}ms`,
+          animationDelay:`${(i*60)%500}ms`,
+        }}
+      />
+    ))}
+  </div>
+);
 
-// ── Main Component ────────────────────────────────────────────────────────────
-const SegmentWorkspace = () => {
+/* ── Helpers ─────────────────────────────────────────────────────────────── */
+const fmt = s => isNaN(s)||!s ? '0:00' : `${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2,'0')}`;
+const audioErrMsg = c => ({1:'Aborted',2:'Network error',3:'Decode error',4:'Not supported'}[c]||'Unknown error');
+
+/* ── Blue circle play button ─────────────────────────────────────────────── */
+const PlayCircle = ({ size = 30, active, loading, playing, onClick }) => (
+  <button onClick={onClick} style={{
+    width:`${size}px`, height:`${size}px`, borderRadius:'50%', flexShrink:0,
+    background:'linear-gradient(135deg,#3b82f6,#1d4ed8)',
+    border:'none', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center',
+    boxShadow:'0 2px 8px rgba(59,130,246,0.4)',
+  }}>
+    {loading && active
+      ? <Loader2 style={{ width:'13px', height:'13px', color:'#fff', animation:'sw-spin 1s linear infinite' }} />
+      : active && playing
+        ? <Pause  style={{ width:'12px', height:'12px', color:'#fff' }} />
+        : <Play   style={{ width:'12px', height:'12px', color:'#fff', marginLeft:'1px' }} />}
+  </button>
+);
+
+/* ════════════════════════════════════════════════════════════════════════════
+   MAIN COMPONENT
+   ════════════════════════════════════════════════════════════════════════════ */
+const SegmentWorkspace = ({ setCurrentPage }) => {
   const { currentJob } = useApp();
 
-  const [currentStepIdx, setCurrentStepIdx] = useState(0);
-  const [isPlaying,      setIsPlaying]      = useState(false);
-  const [isLoading,      setIsLoading]      = useState(false);
-  const [audioError,     setAudioError]     = useState(null);
-  const [currentTime,    setCurrentTime]    = useState(0);
-  const [duration,       setDuration]       = useState(0);
-  const [searchQuery,    setSearchQuery]    = useState('');
-  const [shuffle,        setShuffle]        = useState(false);
-  const [repeat,         setRepeat]         = useState(false);
+  const [stepIdx,     setStepIdx]     = useState(0);
+  const [isPlaying,   setIsPlaying]   = useState(false);
+  const [isLoading,   setIsLoading]   = useState(false);
+  const [audioError,  setAudioError]  = useState(null);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration,    setDuration]    = useState(0);
+  const [search,      setSearch]      = useState('');
+  const [shuffle,     setShuffle]     = useState(false);
+  const [repeat,      setRepeat]      = useState(false);
 
-  const audioRef         = useRef(new Audio());
-  const shouldAutoPlay   = useRef(false);
-  const hasTriedPlay     = useRef(false);
+  // New interactive states
+  const [volume,        setVolume]        = useState(1);
+  const [isMuted,       setIsMuted]       = useState(false);
+  const [showList,      setShowList]      = useState(true);
+  const [isFullscreen,  setIsFullscreen]  = useState(false);
 
-  // Auto-play when job comes from live recording
+  const audioRef     = useRef(new Audio());
+  const autoPlayRef  = useRef(false);
+  const hasPlayedRef = useRef(false);
+  const containerRef = useRef(null);
+
+  useEffect(() => { injectFont(); }, []);
+
+  // Update real audio volume when state changes
   useEffect(() => {
-    setCurrentStepIdx(0);
-    shouldAutoPlay.current = !!currentJob?.fromLive;
+    if (audioRef.current) {
+      audioRef.current.volume = isMuted ? 0 : volume;
+    }
+  }, [volume, isMuted]);
+
+  // Track fullscreen changes (e.g. if user presses ESC)
+  useEffect(() => {
+    const handleFsChange = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', handleFsChange);
+    return () => document.removeEventListener('fullscreenchange', handleFsChange);
+  }, []);
+
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      containerRef.current?.requestFullscreen().catch(() => {});
+    } else {
+      document.exitFullscreen().catch(() => {});
+    }
+  };
+
+  /* reset + auto-play when job changes */
+  useEffect(() => {
+    setStepIdx(0);
+    autoPlayRef.current = !!currentJob?.fromLive;
   }, [currentJob?.id]); // eslint-disable-line
 
-  // Flatten all steps
-  const allSteps = currentJob?.instructions?.flatMap((inst, instIdx) =>
-    inst.steps.map((step, stepIdx) => ({
+  /* flatten all steps across all instructions */
+  const allSteps = (currentJob?.instructions || []).flatMap((inst, iIdx) =>
+    inst.steps.map((step, sIdx) => ({
       ...step,
-      instructionTitle: inst.instruction,
-      instIdx,
-      stepIdx,
-      globalIdx: instIdx * 100 + stepIdx,
+      instTitle: inst.instruction,
+      iIdx, sIdx,
     }))
-  ) || [];
+  );
 
-  const currentStep = allSteps[currentStepIdx];
+  const currentStep = allSteps[stepIdx];
 
-  // Load audio on step change
+  /* ── Audio loading ── */
   useEffect(() => {
     if (!currentStep?.audio) return;
-
-    setIsLoading(true);
-    setAudioError(null);
-    setIsPlaying(false);
-    hasTriedPlay.current = false;
+    setIsLoading(true); setAudioError(null); setIsPlaying(false);
+    hasPlayedRef.current = false;
 
     const audio = audioRef.current;
-    audio.pause();
-    audio.currentTime = 0;
-    audio.src = currentStep.audio;
-    audio.load();
+    audio.pause(); audio.currentTime = 0;
+    audio.src = currentStep.audio; audio.load();
 
-    const onLoadedData    = () => setIsLoading(false);
-    const onTimeUpdate    = () => setCurrentTime(audio.currentTime);
-    const onLoadedMeta    = () => setDuration(audio.duration);
-    const onError         = () => {
-      setAudioError(`Error ${audio.error?.code}: ${getAudioErrorMsg(audio.error?.code)}`);
-      setIsLoading(false);
-      setIsPlaying(false);
+    const onData = () => setIsLoading(false);
+    const onMeta = () => setDuration(audio.duration);
+    const onTime = () => setCurrentTime(audio.currentTime);
+    const onErr  = () => {
+      setAudioError(`Error ${audio.error?.code}: ${audioErrMsg(audio.error?.code)}`);
+      setIsLoading(false); setIsPlaying(false);
     };
-    const onCanPlay = () => {
+    const onCan = () => {
       setIsLoading(false);
-      if (shouldAutoPlay.current && !hasTriedPlay.current) {
-        hasTriedPlay.current = true;
-        audio.play().then(() => setIsPlaying(true)).catch(() => { shouldAutoPlay.current = false; });
+      if (autoPlayRef.current && !hasPlayedRef.current) {
+        hasPlayedRef.current = true;
+        audio.play().then(() => setIsPlaying(true)).catch(() => { autoPlayRef.current = false; });
       }
     };
-    const onEnded = () => {
+    const onEnd = () => {
       setIsPlaying(false);
-      if (!audioError && currentStepIdx < allSteps.length - 1) {
-        setTimeout(() => setCurrentStepIdx(p => p + 1), 400);
-      } else if (repeat) {
-        audio.currentTime = 0;
-        audio.play().then(() => setIsPlaying(true));
-      }
+      if (repeat) { audio.currentTime = 0; audio.play().then(() => setIsPlaying(true)); }
+      else if (stepIdx < allSteps.length - 1) setTimeout(() => setStepIdx(p => p + 1), 400);
     };
 
-    audio.addEventListener('loadeddata',     onLoadedData);
-    audio.addEventListener('loadedmetadata', onLoadedMeta);
-    audio.addEventListener('timeupdate',     onTimeUpdate);
-    audio.addEventListener('canplay',        onCanPlay);
-    audio.addEventListener('ended',          onEnded);
-    audio.addEventListener('error',          onError);
-
+    audio.addEventListener('loadeddata',     onData);
+    audio.addEventListener('loadedmetadata', onMeta);
+    audio.addEventListener('timeupdate',     onTime);
+    audio.addEventListener('canplay',        onCan);
+    audio.addEventListener('ended',          onEnd);
+    audio.addEventListener('error',          onErr);
     return () => {
-      audio.removeEventListener('loadeddata',     onLoadedData);
-      audio.removeEventListener('loadedmetadata', onLoadedMeta);
-      audio.removeEventListener('timeupdate',     onTimeUpdate);
-      audio.removeEventListener('canplay',        onCanPlay);
-      audio.removeEventListener('ended',          onEnded);
-      audio.removeEventListener('error',          onError);
+      audio.removeEventListener('loadeddata',     onData);
+      audio.removeEventListener('loadedmetadata', onMeta);
+      audio.removeEventListener('timeupdate',     onTime);
+      audio.removeEventListener('canplay',        onCan);
+      audio.removeEventListener('ended',          onEnd);
+      audio.removeEventListener('error',          onErr);
       audio.pause();
     };
-  }, [currentStepIdx, currentStep?.audio, allSteps.length, audioError, repeat]); // eslint-disable-line
+  }, [stepIdx, currentStep?.audio, allSteps.length, repeat]); // eslint-disable-line
 
+  /* ── Playback controls ── */
   const togglePlay = async () => {
     if (isLoading || audioError) return;
     const audio = audioRef.current;
-    if (isPlaying) {
-      audio.pause();
-      setIsPlaying(false);
-      shouldAutoPlay.current = false;
-    } else {
-      try {
-        await audio.play();
-        setIsPlaying(true);
-        shouldAutoPlay.current = true;
-      } catch(e) {
-        setAudioError('Playback failed: ' + e.message);
-      }
+    if (isPlaying) { audio.pause(); setIsPlaying(false); autoPlayRef.current = false; }
+    else {
+      try { await audio.play(); setIsPlaying(true); autoPlayRef.current = true; }
+      catch(e) { setAudioError('Playback failed: ' + e.message); }
     }
   };
 
-  const playStep = (idx) => {
-    audioRef.current.pause();
-    setIsPlaying(false);
-    shouldAutoPlay.current = true;
-    setCurrentStepIdx(idx);
+  const jumpTo = idx => { audioRef.current.pause(); setIsPlaying(false); autoPlayRef.current = true; setStepIdx(idx); };
+  const prev   = () => { if (stepIdx > 0) jumpTo(stepIdx - 1); };
+  const next   = () => {
+    if (shuffle) jumpTo(Math.floor(Math.random() * allSteps.length));
+    else if (stepIdx < allSteps.length - 1) jumpTo(stepIdx + 1);
   };
-
-  const prevStep  = () => { if (currentStepIdx > 0) playStep(currentStepIdx - 1); };
-  const nextStep  = () => {
-    if (shuffle) {
-      const next = Math.floor(Math.random() * allSteps.length);
-      playStep(next);
-    } else if (currentStepIdx < allSteps.length - 1) {
-      playStep(currentStepIdx + 1);
-    }
-  };
-
-  const seek = (e) => {
+  const seek   = e => {
     if (!duration) return;
     const r = e.currentTarget.getBoundingClientRect();
     audioRef.current.currentTime = ((e.clientX - r.left) / r.width) * duration;
   };
 
-  const fmt = (s) => {
-    if (isNaN(s)) return '0:00';
-    return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
-  };
-
-  const downloadTranscript = () => {
-    const blob = new Blob([currentJob.transcription], { type: 'text/plain' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `${currentJob.name}_transcript.txt`;
-    a.click();
-  };
-
-  const exportAllChunks = async () => {
-    for (const step of allSteps) {
-      if (step.audio) {
-        try {
-          await apiService.downloadAudio(step.audio, `${step.text.slice(0,30).replace(/[^a-z0-9]/gi,'_')}.mp3`);
-        } catch(_) {}
-      }
+  /* ── Downloads ── */
+  const downloadAll = async () => {
+    for (const s of allSteps) {
+      if (s.audio) try { await apiService.downloadAudio(s.audio, `chunk_${s.iIdx + 1}.mp3`); } catch(_) {}
     }
   };
-
-  const downloadStep = (step) => {
-    if (step.audio) apiService.downloadAudio(step.audio, `chunk_${step.instIdx + 1}.mp3`);
+  const exportBrief = () => {
+    const lines = allSteps.map((s, i) => `Step ${i+1}: ${s.text}`).join('\n');
+    const blob = new Blob([lines], { type: 'text/plain' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = `${currentJob?.name || 'brief'}_educational_brief.txt`; a.click();
+  };
+  const downloadStep = (step, idx) => {
+    if (step.audio) apiService.downloadAudio(step.audio, `audio_chunk_0${idx + 1}.mp3`);
   };
 
-  // Build transcript segments: split by sentence, mark instructions
-  const instructionTexts = new Set(
-    currentJob?.instructions?.map(i => i.instruction?.toLowerCase().trim()) || []
-  );
-  const transcriptSentences = (currentJob?.transcription || '')
-    .split(/(?<=[.!?])\s+/)
-    .filter(Boolean)
-    .map((sentence, idx) => {
-      const lower = sentence.toLowerCase().trim();
-      const isInstruction = [...instructionTexts].some(instr => lower.includes(instr) || instr.includes(lower.slice(0, 30)));
-      return { id: idx, sentence, isInstruction, timestamp: `00:${String(idx * 15 % 60).padStart(2,'0')}` };
-    });
-
-  const filteredTranscript = transcriptSentences.filter(s =>
-    !searchQuery || s.sentence.toLowerCase().includes(searchQuery.toLowerCase())
+  /* ── Filter ── */
+  const filtered = allSteps.filter((s, _) =>
+    !search || s.text?.toLowerCase().includes(search.toLowerCase()) ||
+               s.instTitle?.toLowerCase().includes(search.toLowerCase())
   );
 
-  if (!currentJob) {
-    return (
-      <div className="p-6 flex items-center justify-center h-full">
-        <div className="text-center">
-          <p className="text-gray-400 text-sm">No job selected. Choose a recording from Media Center.</p>
-        </div>
-      </div>
-    );
-  }
+  /* ── Empty state ── */
+  const F = { fontFamily: "'Inter', sans-serif" };
+
+  if (!currentJob) return (
+    <div style={{ ...F, display:'flex', alignItems:'center', justifyContent:'center', height:'100%', backgroundColor:'#f6f7f9' }}>
+      <p style={{ color:'#94a3b8', fontSize:'14px' }}>No job selected. Go back and choose a recording.</p>
+    </div>
+  );
+
+  const progressPct = duration ? (currentTime / duration) * 100 : 0;
 
   return (
-    <div className="flex flex-col h-full bg-gray-50">
+    <div ref={containerRef} style={{ ...F, display:'flex', flexDirection:'column', height:'100%', backgroundColor:'#f6f7f9', overflow:'hidden' }}>
 
-      {/* ── Top bar ── */}
-      <div className="bg-white border-b border-gray-100 px-6 py-4 flex items-center justify-between flex-shrink-0">
-        <div className="flex items-center gap-4">
-          <h1 className="text-xl font-bold text-gray-900 truncate">{currentJob.name}</h1>
-          {currentJob.fromLive && (
-            <span className="px-2.5 py-1 bg-green-50 text-green-600 text-xs font-semibold rounded-full">
-              ▶ Auto-playing
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
+      {/* ══ TOP BAR ══════════════════════════════════════════════════════════ */}
+      <div style={{
+        backgroundColor:'#fff', borderBottom:'1px solid #e8eaf0',
+        padding:'14px 28px', display:'flex', alignItems:'center',
+        justifyContent:'space-between', flexShrink:0,
+      }}>
+        {/* Left: back + title */}
+        <div style={{ display:'flex', flexDirection:'column', gap:'5px' }}>
           <button
-            onClick={downloadTranscript}
-            className="flex items-center gap-2 px-4 py-2 border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-50 transition-colors"
+            onClick={() => setCurrentPage && setCurrentPage('dashboard')}
+            style={{ display:'flex', alignItems:'center', gap:'4px', background:'none', border:'none', cursor:'pointer', padding:0, color:'#475569', fontSize:'13px', fontWeight:500 }}
           >
-            <Download className="w-4 h-4" />
-            Download Full Transcript
+            <ChevronLeft style={{ width:'16px', height:'16px' }} />
+            Home
           </button>
-          <button
-            onClick={exportAllChunks}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-xl text-sm font-medium transition-colors shadow-sm shadow-blue-200"
-          >
-            Export All Chunks
+          <h1 style={{ fontSize:'20px', fontWeight:700, color:'#1e293b', margin:0, lineHeight:1.3 }}>
+            {currentJob.name}
+          </h1>
+        </div>
+
+        {/* Right: action buttons */}
+        <div style={{ display:'flex', alignItems:'center', gap:'10px' }}>
+          <button onClick={exportBrief} style={{
+            padding:'8px 18px', borderRadius:'20px',
+            border:'1.5px solid #cbd5e1', background:'#fff',
+            color:'#334155', fontSize:'13px', fontWeight:600, cursor:'pointer',
+          }}>
+            Export Educational Brief
+          </button>
+          <button onClick={downloadAll} style={{
+            padding:'8px 20px', borderRadius:'20px',
+            border:'none', background:'linear-gradient(135deg,#3b82f6,#1d4ed8)',
+            color:'#fff', fontSize:'13px', fontWeight:600, cursor:'pointer',
+            boxShadow:'0 2px 8px rgba(59,130,246,0.35)',
+          }}>
+            Download All Modules
           </button>
         </div>
       </div>
 
-      {/* ── Body: two-column ── */}
-      <div className="flex-1 overflow-hidden flex gap-0 min-h-0">
+      {/* ══ BODY ═════════════════════════════════════════════════════════════ */}
+      <div style={{ flex:1, display:'flex', gap:'20px', padding:'20px 28px', minHeight:0, overflow:'hidden', justifyContent:'center' }}>
 
-        {/* Left: Transcript */}
-        <div className="flex-1 flex flex-col min-w-0 border-r border-gray-100">
+        {/* ── LEFT: Instruction Chunks list (Toggleable) ───────────────────── */}
+        {showList && (
+          <div style={{
+            flex:1, minWidth:0, maxWidth:'600px', backgroundColor:'#fff',
+            borderRadius:'16px', border:'1px solid #e2e8f0',
+            display:'flex', flexDirection:'column', overflow:'hidden',
+          }}>
           {/* Search */}
-          <div className="p-4 border-b border-gray-100 bg-white">
-            <div className="relative">
-              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <div style={{ padding:'16px 20px', borderBottom:'1px solid #f1f5f9', flexShrink:0 }}>
+            <div style={{ position:'relative' }}>
+              <Search style={{ position:'absolute', left:'12px', top:'50%', transform:'translateY(-50%)', width:'15px', height:'15px', color:'#94a3b8' }} />
               <input
                 type="text"
                 placeholder="Search chunks or word..."
-                value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
-                className="w-full pl-9 pr-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                style={{
+                  width:'100%', boxSizing:'border-box',
+                  paddingLeft:'36px', paddingRight:'14px', paddingTop:'9px', paddingBottom:'9px',
+                  border:'1.5px solid #e2e8f0', borderRadius:'10px',
+                  fontSize:'13px', color:'#475569', outline:'none',
+                  backgroundColor:'#f8fafc',
+                }}
               />
             </div>
           </div>
 
-          {/* Transcript lines */}
-          <div className="flex-1 overflow-y-auto p-6 space-y-5 bg-white">
-            {filteredTranscript.length === 0 ? (
-              <p className="text-sm text-gray-400 text-center py-8">No transcript available.</p>
-            ) : (
-              filteredTranscript.map((seg) => (
-                <div key={seg.id} className="flex items-start gap-4">
-                  <span className="text-xs font-mono text-gray-400 pt-0.5 flex-shrink-0 w-12">{seg.timestamp}</span>
-                  <div className="flex items-start gap-3 flex-1">
-                    {seg.isInstruction && (
-                      <button
-                        onClick={() => {
-                          const matchIdx = allSteps.findIndex(s =>
-                            s.text?.toLowerCase().includes(seg.sentence.toLowerCase().slice(0, 20))
-                          );
-                          if (matchIdx >= 0) playStep(matchIdx);
-                        }}
-                        className="flex-shrink-0 w-7 h-7 bg-blue-500 rounded-full flex items-center justify-center mt-0.5 hover:bg-blue-600 transition-colors shadow-sm shadow-blue-200"
-                      >
-                        <Play className="w-3 h-3 text-white" />
-                      </button>
-                    )}
-                    <p className={`text-sm leading-relaxed ${
-                      seg.isInstruction ? 'text-blue-600 font-medium' : 'text-gray-600'
-                    }`}>
-                      {seg.sentence}
-                    </p>
+          {/* Chunk rows */}
+          <div style={{ flex:1, overflowY:'auto', padding:'12px 0' }}>
+            {filtered.length === 0 ? (
+              <p style={{ textAlign:'center', color:'#94a3b8', fontSize:'13px', paddingTop:'40px' }}>
+                No instruction chunks found.
+              </p>
+            ) : filtered.map((step, listIdx) => {
+              const gIdx   = allSteps.indexOf(step);
+              const active = gIdx === stepIdx;
+              return (
+                <div
+                  key={`${step.iIdx}-${step.sIdx}`}
+                  style={{
+                    display:'flex', alignItems:'flex-start', gap:'14px',
+                    padding:'14px 24px',
+                    backgroundColor: active ? '#f0f7ff' : 'transparent',
+                    borderLeft: active ? '3px solid #3b82f6' : '3px solid transparent',
+                    transition:'background 0.15s',
+                    cursor:'pointer',
+                  }}
+                  onClick={() => jumpTo(gIdx)}
+                >
+                  {/* Step Number */}
+                  <span style={{ fontSize:'13px', fontWeight:700, color:'#64748b', flexShrink:0, paddingTop:'8px', minWidth:'48px' }}>
+                    Step {gIdx + 1}:
+                  </span>
+
+                  {/* Play circle */}
+                  <div style={{ paddingTop:'4px', flexShrink:0 }}>
+                    <PlayCircle
+                      active={active}
+                      loading={isLoading}
+                      playing={isPlaying}
+                      onClick={e => { e.stopPropagation(); active ? togglePlay() : jumpTo(gIdx); }}
+                    />
                   </div>
+
+                  {/* Instruction text */}
+                  <p style={{
+                    margin:0, fontSize:'14px', lineHeight:1.65, flex:1,
+                    color: active ? '#1d4ed8' : '#2563eb',
+                    fontWeight: active ? 600 : 500,
+                  }}>
+                    {step.text}
+                  </p>
                 </div>
-              ))
-            )}
+              );
+            })}
           </div>
-        </div>
-
-        {/* Right: AI-Generated Learning Modules */}
-        <div className="w-80 xl:w-96 flex-shrink-0 bg-white overflow-y-auto">
-          <div className="p-5 border-b border-gray-100">
-            <h3 className="font-bold text-gray-900">AI-Generated Learning Modules</h3>
           </div>
+        )}
 
+        {/* ── RIGHT: AI Learning Modules ───────────────────────────────────── */}
+        <div style={{
+          width:'340px', flexShrink:0,
+          display:'flex', flexDirection:'column', gap:'16px',
+          overflowY:'auto',
+        }}>
+          {/* Error banner */}
           {audioError && (
-            <div className="mx-4 mt-4 p-3 bg-red-50 border border-red-100 rounded-xl text-xs text-red-600 flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-              <span>{audioError}</span>
+            <div style={{ padding:'10px 14px', backgroundColor:'#fef2f2', border:'1px solid #fecaca', borderRadius:'10px', display:'flex', alignItems:'flex-start', gap:'8px', flexShrink:0 }}>
+              <AlertCircle style={{ width:'14px', height:'14px', color:'#ef4444', flexShrink:0, marginTop:'1px' }} />
+              <span style={{ fontSize:'12px', color:'#dc2626' }}>{audioError}</span>
             </div>
           )}
 
-          <div className="p-4 space-y-3">
-            {currentJob.instructions?.map((inst, instIdx) => (
-              <div key={instIdx} className="rounded-xl border border-gray-100 overflow-hidden">
-                {/* Instruction title */}
-                <div className="px-4 py-3 bg-gray-50 border-b border-gray-100">
-                  <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">{inst.instruction}</p>
+          <h2 style={{ margin:0, fontSize:'17px', fontWeight:700, color:'#1e293b', paddingLeft:'2px', flexShrink:0 }}>
+            AI-Generated Learning Modules
+          </h2>
+
+          {/* Per-instruction cards */}
+          {(currentJob.instructions || []).map((inst, iIdx) => {
+            const step = inst.steps[0];
+            const gIdx = allSteps.findIndex(s => s.iIdx === iIdx && s.sIdx === 0);
+            const active = gIdx === stepIdx;
+            const fname = `audio_chunk_0${gIdx + 1}.mp3`;
+
+            return (
+              <div key={iIdx} style={{
+                backgroundColor:'#fff', 
+                borderRadius:'16px',
+                padding: '20px',
+                boxShadow: active ? '0 4px 20px rgba(59,130,246,0.1)' : '0 2px 12px rgba(0,0,0,0.03)',
+                border: active ? '1px solid #bfdbfe' : '1px solid #f1f5f9',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '16px',
+              }}>
+                {/* Light purple instruction box */}
+                <div style={{
+                  backgroundColor: '#f5f4fa',
+                  borderRadius: '8px',
+                  padding: '14px 16px',
+                }}>
+                  <p style={{ margin:0, fontSize:'14px', color:'#334155', lineHeight:1.5 }}>
+                    <span style={{ fontWeight:700, color:'#475569' }}>Step {iIdx + 1}:</span>
+                    {' '}
+                    <span style={{ fontWeight:500 }}>{inst.instruction}</span>
+                  </p>
                 </div>
 
-                {/* Steps */}
-                {inst.steps.map((step, stepIdx) => {
-                  const globalIdx = allSteps.findIndex(s => s.instIdx === instIdx && s.stepIdx === stepIdx);
-                  const isActive  = globalIdx === currentStepIdx;
+                {/* Play Segment + Download Row */}
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding: '0 4px' }}>
+                  {/* Play Segment */}
+                  <button
+                    onClick={() => active ? togglePlay() : jumpTo(gIdx)}
+                    style={{ display:'flex', alignItems:'center', gap:'10px', background:'none', border:'none', cursor:'pointer', padding:0 }}
+                  >
+                    <PlayCircle size={28} active={active} loading={isLoading} playing={isPlaying} onClick={() => {}} />
+                    <span style={{ fontSize:'13px', fontWeight:600, color:'#334155' }}>
+                      {active && isPlaying ? 'Playing…' : 'Play Segment'}
+                    </span>
+                  </button>
 
-                  return (
-                    <div
-                      key={stepIdx}
-                      className={`p-4 transition-colors ${
-                        isActive ? 'bg-blue-50' : 'bg-white hover:bg-gray-50'
-                      }`}
-                    >
-                      <p className={`text-sm font-medium mb-3 leading-snug ${
-                        isActive ? 'text-blue-700' : 'text-gray-800'
-                      }`}>
-                        <span className="font-bold">Step {globalIdx + 1}:</span> {step.text}
-                        {isActive && isPlaying && (
-                          <span className="ml-2 text-xs text-blue-500 font-semibold animate-pulse">▶ Playing</span>
-                        )}
-                      </p>
-
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => globalIdx >= 0 ? playStep(globalIdx) : null}
-                          className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-xs font-semibold transition-colors"
-                        >
-                          {isLoading && isActive ? (
-                            <Loader2 className="w-3 h-3 animate-spin" />
-                          ) : isPlaying && isActive ? (
-                            <Pause className="w-3 h-3" />
-                          ) : (
-                            <Play className="w-3 h-3" />
-                          )}
-                          {isPlaying && isActive ? 'Playing' : 'Play Segment'}
-                        </button>
-                        <button
-                          onClick={() => downloadStep(step)}
-                          className="flex items-center gap-1 py-2 px-2.5 border border-gray-200 text-gray-500 rounded-lg hover:bg-gray-50 text-xs transition-colors"
-                          title="Download"
-                        >
-                          <Download className="w-3 h-3" />
-                          <span className="hidden xl:inline">{step.audio ? 'audio_chunk.mp3' : 'N/A'}</span>
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
+                  {/* Download */}
+                  <button
+                    onClick={() => downloadStep(step, gIdx)}
+                    title="Download"
+                    style={{ display:'flex', alignItems:'center', gap:'6px', background:'none', border:'none', cursor:'pointer', padding:0 }}
+                  >
+                    <Download style={{ width:'14px', height:'14px', color:'#64748b' }} />
+                    <span style={{ fontSize:'12px', color:'#64748b', fontWeight:500 }}>{fname}</span>
+                  </button>
+                </div>
               </div>
-            ))}
+            );
+          })}
 
-            {allSteps.length === 0 && (
-              <p className="text-sm text-gray-400 text-center py-8">No steps available.</p>
-            )}
-          </div>
+          {allSteps.length === 0 && (
+            <p style={{ textAlign:'center', color:'#94a3b8', fontSize:'13px', paddingTop:'24px' }}>
+              No instruction chunks available.
+            </p>
+          )}
         </div>
       </div>
 
-      {/* ── Bottom Audio Player ── */}
-      <div className="flex-shrink-0 bg-white border-t border-gray-200 px-6 py-3 flex items-center gap-6">
-
-        {/* Waveform */}
-        <div className="flex-shrink-0">
-          <WaveformBars playing={isPlaying} />
-        </div>
-
-        {/* Progress bar */}
-        <div className="flex items-center gap-3 flex-1 min-w-0">
-          <span className="text-xs font-mono text-gray-400 flex-shrink-0">{fmt(currentTime)}</span>
-          <div
-            className="flex-1 h-1.5 bg-gray-200 rounded-full cursor-pointer relative"
-            onClick={seek}
-          >
-            <div
-              className="h-full bg-gray-800 rounded-full transition-all"
-              style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
-            />
+      {/* ══ BOTTOM AUDIO PLAYER ══════════════════════════════════════════════ */}
+      <div style={{
+        padding: '0 28px 24px 28px',
+        flexShrink: 0,
+      }}>
+        <div style={{
+          backgroundColor: '#fff',
+          borderRadius: '100px',
+          border: '1px solid #cbd5e1',
+          padding: '12px 24px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.02)',
+        }}>
+          {/* Left: Waveform Pill */}
+          <div style={{
+            backgroundColor: '#f1f5f9',
+            borderRadius: '100px',
+            padding: '8px 20px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: '180px',
+          }}>
+            <WaveBars playing={isPlaying} />
           </div>
-          <span className="text-xs font-mono text-gray-400 flex-shrink-0">{fmt(duration)}</span>
-        </div>
 
-        {/* Controls */}
-        <div className="flex items-center gap-2 flex-shrink-0">
-          <button
-            onClick={() => setShuffle(s => !s)}
-            className={`p-1.5 rounded-lg transition-colors ${shuffle ? 'text-blue-500' : 'text-gray-400 hover:text-gray-700'}`}
-          >
-            <Shuffle className="w-4 h-4" />
-          </button>
+          {/* Middle: Transport & Progress */}
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', maxWidth: '500px', margin: '0 40px' }}>
+            {/* Controls */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+              <button onClick={() => setShuffle(s => !s)} style={{ background:'none', border:'none', cursor:'pointer', padding:0, color: shuffle ? '#3b82f6' : '#94a3b8' }}>
+                <Shuffle style={{ width:'18px', height:'18px' }} />
+              </button>
+              <button onClick={prev} disabled={stepIdx === 0} style={{ background:'none', border:'none', cursor: stepIdx===0 ? 'not-allowed':'pointer', padding:0, color:'#94a3b8', opacity: stepIdx===0 ? 0.4 : 1 }}>
+                <SkipBack style={{ width:'20px', height:'20px', fill: 'currentColor' }} />
+              </button>
 
-          <button
-            onClick={prevStep}
-            disabled={currentStepIdx === 0}
-            className="p-1.5 text-gray-600 hover:text-gray-900 disabled:opacity-30 transition-colors"
-          >
-            <SkipBack className="w-5 h-5" />
-          </button>
+              {/* Main play button */}
+              <button
+                onClick={togglePlay}
+                disabled={isLoading || !!audioError}
+                style={{
+                  width:'44px', height:'44px', borderRadius:'50%',
+                  background:'#dbeafe',
+                  border:'none', cursor: (isLoading || audioError) ? 'not-allowed' : 'pointer',
+                  display:'flex', alignItems:'center', justifyContent:'center',
+                  opacity: (isLoading || audioError) ? 0.5 : 1,
+                }}
+              >
+                {isLoading
+                  ? <Loader2 style={{ width:'18px', height:'18px', color:'#3b82f6', animation:'sw-spin 1s linear infinite' }} />
+                  : isPlaying
+                    ? <Pause style={{ width:'18px', height:'18px', color:'#3b82f6', fill: 'currentColor' }} />
+                    : <Play  style={{ width:'18px', height:'18px', color:'#3b82f6', fill: 'currentColor', marginLeft:'2px' }} />}
+              </button>
 
-          <button
-            onClick={togglePlay}
-            disabled={isLoading || !!audioError}
-            className="w-10 h-10 bg-gray-900 hover:bg-gray-700 text-white rounded-full flex items-center justify-center disabled:opacity-40 transition-colors shadow-sm"
-          >
-            {isLoading ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : isPlaying ? (
-              <Pause className="w-4 h-4" />
-            ) : (
-              <Play className="w-4 h-4 ml-0.5" />
-            )}
-          </button>
+              <button onClick={next} disabled={!shuffle && stepIdx === allSteps.length - 1} style={{ background:'none', border:'none', cursor:(!shuffle&&stepIdx===allSteps.length-1)?'not-allowed':'pointer', padding:0, color:'#94a3b8', opacity:(!shuffle&&stepIdx===allSteps.length-1)?0.4:1 }}>
+                <SkipForward style={{ width:'20px', height:'20px', fill: 'currentColor' }} />
+              </button>
+              <button onClick={() => setRepeat(r => !r)} style={{ background:'none', border:'none', cursor:'pointer', padding:0, color: repeat ? '#3b82f6' : '#94a3b8' }}>
+                <Repeat style={{ width:'18px', height:'18px' }} />
+              </button>
+            </div>
 
-          <button
-            onClick={nextStep}
-            disabled={!shuffle && currentStepIdx === allSteps.length - 1}
-            className="p-1.5 text-gray-600 hover:text-gray-900 disabled:opacity-30 transition-colors"
-          >
-            <SkipForward className="w-5 h-5" />
-          </button>
+            {/* Progress */}
+            <div style={{ width: '100%', display:'flex', alignItems:'center', gap:'12px' }}>
+              <span style={{ fontSize:'11px', color:'#94a3b8', fontWeight:500, flexShrink:0 }}>{fmt(currentTime)}</span>
+              <div onClick={seek} style={{ flex:1, height:'4px', backgroundColor:'#e2e8f0', borderRadius:'2px', cursor:'pointer' }}>
+                <div style={{ height:'100%', backgroundColor:'#64748b', borderRadius:'2px', width:`${progressPct}%`, transition:'width 0.1s' }} />
+              </div>
+              <span style={{ fontSize:'11px', color:'#94a3b8', fontWeight:500, flexShrink:0 }}>{fmt(duration)}</span>
+            </div>
+          </div>
 
-          <button
-            onClick={() => setRepeat(r => !r)}
-            className={`p-1.5 rounded-lg transition-colors ${repeat ? 'text-blue-500' : 'text-gray-400 hover:text-gray-700'}`}
-          >
-            <Repeat className="w-4 h-4" />
-          </button>
+          {/* Right: Volume & Extra */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexShrink: 0, width: '180px', justifyContent: 'flex-end' }}>
+            {/* Playlist Toggle */}
+            <button 
+              onClick={() => setShowList(s => !s)}
+              title="Toggle Chunk List"
+              style={{ background:'none', border:'none', cursor:'pointer', padding:0, color: showList ? '#3b82f6' : '#94a3b8' }}
+            >
+              <ListMusic style={{ width:'18px', height:'18px' }} />
+            </button>
+            
+            {/* Volume Control */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <button 
+                onClick={() => setIsMuted(m => !m)}
+                title={isMuted ? "Unmute" : "Mute"}
+                style={{ background:'none', border:'none', cursor:'pointer', padding:0, color:'#94a3b8' }}
+              >
+                {isMuted || volume === 0 ? <VolumeX style={{ width:'18px', height:'18px' }} /> : <Volume2 style={{ width:'18px', height:'18px' }} />}
+              </button>
+              <div 
+                onClick={(e) => {
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const val = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+                  setVolume(val);
+                  if (isMuted && val > 0) setIsMuted(false);
+                }}
+                style={{ width: '60px', height: '4px', backgroundColor: '#e2e8f0', borderRadius: '2px', cursor: 'pointer', display: 'flex' }}
+              >
+                <div style={{ width: `${(isMuted ? 0 : volume) * 100}%`, height: '100%', backgroundColor: '#94a3b8', borderRadius: '2px', transition: 'width 0.1s' }}></div>
+              </div>
+            </div>
+
+            {/* Fullscreen Toggle */}
+            <button 
+              onClick={toggleFullscreen}
+              title={isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
+              style={{ background:'none', border:'none', cursor:'pointer', padding:0, color:'#94a3b8' }}
+            >
+              {isFullscreen ? <Minimize2 style={{ width:'16px', height:'16px' }} /> : <Maximize2 style={{ width:'16px', height:'16px' }} />}
+            </button>
+          </div>
         </div>
       </div>
     </div>

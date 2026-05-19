@@ -1,9 +1,6 @@
-// Frontend/src/components/layout/Header.jsx
-
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, ChevronDown, LogOut } from 'lucide-react';
 
-const TOKEN_KEY = 'rehear_token';
+import { IconSearch, IconChevronDown, IconMenu } from '../../assets/icons';
 
 function getStoredUser() {
   try {
@@ -14,84 +11,154 @@ function getStoredUser() {
   }
 }
 
-function logout() {
-  localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem('rehear_user');
-  // Redirect back to landing page
-  window.location.href = 'http://localhost:5173';
-}
-
-const Header = () => {
+const Header = ({ onLogout, onToggleSidebar }) => {
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   const dropdownRef = useRef(null);
   const user = getStoredUser();
-  const displayName = user?.name || 'User';
-  const initials = displayName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+  const displayName = user?.name || 'Shaun co';
 
-  // Close dropdown on outside click
   useEffect(() => {
-    function handleClick(e) {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
-        setDropdownOpen(false);
-      }
-    }
+    const handleClick = (e) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) setDropdownOpen(false);
+    };
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
   }, []);
 
-  return (
-    <div className="bg-white border-b border-gray-200 px-4 sm:px-6 py-3 flex items-center justify-between">
+  const handleLogout = async () => {
+    setLoggingOut(true);
+    try {
+      if (onLogout) await onLogout();
+    } finally {
+      setLoggingOut(false);
+    }
+  };
 
-      {/* Search — hidden on mobile */}
-      <div className="hidden md:flex items-center gap-4 flex-1 max-w-xl">
-        <div className="relative flex-1">
-          <Search className="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+  return (
+    <div
+      className="bg-white flex items-center justify-between w-full"
+      style={{ padding: '10px 28px', boxShadow: '0px 2px 8px rgba(0,0,0,0.04)', fontFamily: 'Urbanist, sans-serif', flexShrink: 0 }}
+    >
+      {/* Left: logo + hamburger */}
+      <div className="flex items-center" style={{ gap: '14px' }}>
+        <img
+          src="/rehear-logo-transparent.png"
+          alt="Rehear APD"
+          style={{ height: '80px', width: 'auto', objectFit: 'contain' }}
+          onError={e => { e.target.style.display = 'none'; }}
+        />
+        <div onClick={onToggleSidebar} className="cursor-pointer transition-all duration-200 hover:scale-110 hover:opacity-100" style={{ opacity: 0.6 }}>
+          <IconMenu style={{ height: '22px', width: '22px' }} />
+        </div>
+      </div>
+
+      {/* Center: search */}
+      <div style={{ flex: 1, maxWidth: '520px', margin: '0 24px' }}>
+        <div
+          className="bg-white flex items-center"
+          style={{ gap: '8px', border: '1px solid #c1c1c8', borderRadius: '10px', padding: '9px 14px' }}
+        >
+          <IconSearch style={{ width: '18px', height: '18px', flexShrink: 0, opacity: 0.5, color: '#6a7380' }} />
           <input
             type="text"
-            placeholder="Search recordings or jobs..."
-            className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            placeholder="Search lectures or modules..."
+            className="flex-1 outline-none bg-transparent"
+            style={{ fontFamily: 'Urbanist, sans-serif', fontSize: '13px', color: '#6a7380', fontWeight: 400 }}
           />
         </div>
       </div>
 
-      {/* Mobile: logo */}
-      <div className="md:hidden flex-1">
-        <span className="text-lg font-bold text-blue-600">APD Tool</span>
-      </div>
-
-      {/* Right side */}
-      <div className="flex items-center gap-2 sm:gap-4">
-        {/* Mobile search icon */}
-        <button className="md:hidden p-2 hover:bg-gray-100 rounded-lg">
-          <Search className="w-5 h-5 text-gray-600" />
-        </button>
-
-        {/* User profile dropdown */}
-        <div className="relative" ref={dropdownRef}>
+      {/* Right: user only (bell removed) */}
+      <div className="flex items-center" style={{ gap: '18px' }}>
+        {/* User */}
+        <div style={{ position: 'relative' }} ref={dropdownRef}>
           <button
             onClick={() => setDropdownOpen(o => !o)}
-            className="flex items-center gap-2 cursor-pointer hover:bg-gray-50 rounded-lg px-2 py-1"
+            className="flex items-center cursor-pointer"
+            style={{ gap: '8px', background: 'none', border: 'none' }}
           >
-            <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-white text-xs font-bold select-none">
-              {initials}
+            <div style={{ position: 'relative', width: '38px', height: '38px', flexShrink: 0 }}>
+              <div
+                className="w-full h-full rounded-full flex items-center justify-center text-white font-bold select-none"
+                style={{ backgroundColor: '#1674cc', fontSize: '14px' }}
+              >
+                {displayName.slice(0, 2).toUpperCase()}
+              </div>
+              <div
+                className="absolute"
+                style={{ bottom: 1, right: 1, backgroundColor: '#129578', borderRadius: '50%', width: '10px', height: '10px', border: '1.5px solid white' }}
+              />
             </div>
-            <span className="font-medium text-gray-700 hidden lg:block">{displayName.split(' ')[0]}</span>
-            <ChevronDown className="w-4 h-4 text-gray-500 hidden lg:block" />
+            <span className="font-semibold whitespace-nowrap" style={{ fontSize: '14px', color: '#343434', lineHeight: 1.3 }}>
+              {displayName}
+            </span>
+            <IconChevronDown style={{ width: '18px', height: '18px', opacity: 0.6, color: '#343434' }} />
           </button>
 
           {dropdownOpen && (
-            <div className="absolute right-0 mt-2 w-48 bg-white rounded-xl shadow-lg border border-gray-100 py-1 z-50">
-              <div className="px-4 py-2 border-b border-gray-100">
-                <p className="text-sm font-semibold text-gray-800 truncate">{displayName}</p>
-                <p className="text-xs text-gray-400 truncate">{user?.email || ''}</p>
+            <div
+              className="absolute right-0 mt-2 bg-white rounded-xl shadow-lg border border-gray-100 z-50"
+              style={{
+                width: '220px',
+                padding: '0',
+                overflow: 'hidden',
+                animation: 'dropdownFadeIn 0.15s ease-out',
+              }}
+            >
+              <style>{`
+                @keyframes dropdownFadeIn {
+                  from { opacity: 0; transform: translateY(-6px); }
+                  to   { opacity: 1; transform: translateY(0); }
+                }
+              `}</style>
+
+              {/* User info section */}
+              <div style={{ padding: '14px 16px', borderBottom: '1px solid #f0f0f4' }}>
+                <div className="flex items-center" style={{ gap: '10px' }}>
+                  <div
+                    className="rounded-full flex items-center justify-center text-white font-bold select-none"
+                    style={{ width: '36px', height: '36px', backgroundColor: '#1674cc', fontSize: '13px', flexShrink: 0 }}
+                  >
+                    {displayName.slice(0, 2).toUpperCase()}
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <p className="font-semibold truncate" style={{ fontSize: '13px', color: '#343434', margin: 0 }}>{displayName}</p>
+                    <p className="truncate" style={{ fontSize: '11px', color: '#8f95a0', margin: '2px 0 0' }}>{user?.email || ''}</p>
+                  </div>
+                </div>
               </div>
-              <button
-                onClick={logout}
-                className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"
-              >
-                <LogOut className="w-4 h-4" />
-                Log out
-              </button>
+
+              {/* Logout button */}
+              <div style={{ padding: '6px 8px' }}>
+                <button
+                  id="header-logout-btn"
+                  onClick={handleLogout}
+                  disabled={loggingOut}
+                  className="flex items-center w-full transition-colors"
+                  style={{
+                    gap: '10px',
+                    padding: '10px 12px',
+                    borderRadius: '8px',
+                    background: 'none',
+                    border: 'none',
+                    cursor: loggingOut ? 'not-allowed' : 'pointer',
+                    opacity: loggingOut ? 0.6 : 1,
+                  }}
+                  onMouseEnter={e => { if (!loggingOut) e.currentTarget.style.backgroundColor = '#fef2f2'; }}
+                  onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+                >
+                  {/* Logout icon */}
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" style={{ flexShrink: 0 }}>
+                    <path d="M8.9 7.56C9.21 3.96 11.06 2.49 15.11 2.49H15.24C19.71 2.49 21.5 4.28 21.5 8.75V15.27C21.5 19.74 19.71 21.53 15.24 21.53H15.11C11.09 21.53 9.24 20.08 8.91 16.54" stroke="#ef4444" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                    <path d="M15 12H3.62" stroke="#ef4444" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                    <path d="M5.85 8.65L2.5 12L5.85 15.35" stroke="#ef4444" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                  <span className="font-semibold" style={{ fontSize: '13px', color: '#ef4444', lineHeight: 1.3 }}>
+                    {loggingOut ? 'Logging out…' : 'Log out'}
+                  </span>
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -101,3 +168,4 @@ const Header = () => {
 };
 
 export default Header;
+

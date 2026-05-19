@@ -1,96 +1,150 @@
-// Frontend/src/components/layout/Sidebar.jsx
-
 import React, { useState } from 'react';
-import { LayoutDashboard, Music2, AlignLeft, Settings, HelpCircle, Menu, X, LogOut } from 'lucide-react';
 
-const Sidebar = ({ currentPage, setCurrentPage }) => {
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+import { IconCategory, IconFolder, IconEdit, IconSettings, IconHelp, IconLogout } from '../../assets/icons';
 
-  const menuItems = [
-    { id: 'dashboard', icon: LayoutDashboard, label: 'Dashboard' },
-    { id: 'media',     icon: Music2,          label: 'Media Center' },
-    { id: 'segment',   icon: AlignLeft,        label: 'Segment Workspace' },
-    { id: 'settings',  icon: Settings,         label: 'Settings' },
-    { id: 'help',      icon: HelpCircle,       label: 'Help Center' },
-  ];
+const menuItems = [
+  { id: 'dashboard', icon: IconCategory,    label: 'Learning Hub' },
+  { id: 'media',     icon: IconFolder,      label: 'Resource Library' },
+  { id: 'segment',   icon: IconEdit,        label: 'Module Editor' },
+  { id: 'settings',  icon: IconSettings,    label: 'Settings' },
+  { id: 'help',      icon: IconHelp,        label: 'Help Center' },
+];
 
-  const handleNavigation = (page) => {
+const Sidebar = ({ currentPage, setCurrentPage, onLogout, isCollapsed }) => {
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
+
+  const effectivelyCollapsed = isCollapsed && !isHovered;
+
+  const navigate = (page) => {
     setCurrentPage(page);
-    setIsMobileMenuOpen(false);
+    setMobileOpen(false);
+  };
+
+  const handleLogout = async () => {
+    setLoggingOut(true);
+    try {
+      if (onLogout) await onLogout();
+    } finally {
+      setLoggingOut(false);
+    }
   };
 
   return (
     <>
-      {/* Mobile toggle */}
       <button
-        onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+        onClick={() => setMobileOpen(!mobileOpen)}
         className="lg:hidden fixed top-4 left-4 z-50 p-2 bg-white rounded-lg shadow-md"
       >
-        {isMobileMenuOpen ? <X className="w-6 h-6 text-gray-700" /> : <Menu className="w-6 h-6 text-gray-700" />}
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+          <path d="M3 12H21M3 6H21M3 18H21" stroke="#343434" strokeWidth="2" strokeLinecap="round" />
+        </svg>
       </button>
 
-      {/* Mobile overlay */}
-      {isMobileMenuOpen && (
-        <div
-          className="lg:hidden fixed inset-0 bg-black bg-opacity-50 z-30"
-          onClick={() => setIsMobileMenuOpen(false)}
-        />
+      {mobileOpen && (
+        <div className="lg:hidden fixed inset-0 bg-black/50 z-30" onClick={() => setMobileOpen(false)} />
       )}
 
-      {/* Sidebar */}
-      <div className={`
-        fixed lg:static inset-y-0 left-0 z-40
-        w-56 bg-white border-r border-sky-100 h-screen flex flex-col
-        transform transition-transform duration-300 ease-in-out
-        ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
-      `}>
-        {/* Logo */}
-        <div className="px-4 py-5 border-b border-sky-100 flex items-center justify-center bg-gradient-to-b from-sky-50 to-white">
-          <img
-            src="/APD LOGO.png"
-            alt="APD Tool"
-            className="h-20 w-auto object-contain"
-          />
+      <div
+        className={`fixed lg:static inset-y-0 left-0 z-40 bg-white h-full flex flex-col transform transition-all duration-300 ease-in-out
+          ${mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}
+        style={{ width: effectivelyCollapsed ? '80px' : '220px', fontFamily: 'Urbanist, sans-serif', flexShrink: 0, borderRight: '1px solid #f0f0f4' }}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+      >
+        {/* Nav */}
+        <div className="flex-1 overflow-y-auto" style={{ position: 'relative' }}>
+          <nav className="flex flex-col" style={{ gap: '4px', paddingLeft: effectivelyCollapsed ? '8px' : '16px', paddingRight: effectivelyCollapsed ? '8px' : '16px', paddingTop: '12px' }}>
+            {menuItems.map((item) => {
+              const active = currentPage === item.id;
+              return (
+                <div
+                  key={item.id}
+                  onClick={() => navigate(item.id)}
+                  className="relative flex items-center cursor-pointer transition-all duration-300"
+                  style={{
+                    gap: effectivelyCollapsed ? '0px' : '10px',
+                    padding: effectivelyCollapsed ? '9px 0px' : '9px 10px',
+                    borderRadius: '8px',
+                    backgroundColor: active ? '#f3f1fd' : 'transparent',
+                    justifyContent: effectivelyCollapsed ? 'center' : 'flex-start',
+                  }}
+                  onMouseEnter={e => { if (!active) e.currentTarget.style.backgroundColor = 'rgba(243,241,253,0.5)'; }}
+                  onMouseLeave={e => { if (!active) e.currentTarget.style.backgroundColor = 'transparent'; }}
+                >
+                  {active && (
+                    <span style={{
+                      position: 'absolute',
+                      left: effectivelyCollapsed ? '0px' : '-16px',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      width: '3px',
+                      height: '24px',
+                      backgroundColor: '#1674cc',
+                      borderRadius: '0 3px 3px 0',
+                      transition: 'all 0.3s ease',
+                    }} />
+                  )}
+                  <item.icon style={{ width: '20px', height: '20px', flexShrink: 0, color: active ? '#1674cc' : '#6a7380' }} />
+                  <span 
+                    className="font-semibold whitespace-nowrap overflow-hidden transition-all duration-300" 
+                    style={{ 
+                      fontSize: '14px', 
+                      lineHeight: 1.3, 
+                      color: active ? '#1674cc' : '#6a7380',
+                      maxWidth: effectivelyCollapsed ? '0px' : '120px',
+                      opacity: effectivelyCollapsed ? 0 : 1,
+                    }}
+                  >
+                    {item.label}
+                  </span>
+                </div>
+              );
+            })}
+          </nav>
         </div>
 
-        {/* Nav */}
-        <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
-          {menuItems.map((item) => {
-            const active = currentPage === item.id;
-            return (
-              <div
-                key={item.id}
-                onClick={() => handleNavigation(item.id)}
-                className={`
-                  flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer
-                  transition-all duration-150 group relative
-                  ${active
-                    ? 'bg-sky-50 text-sky-600'
-                    : 'text-slate-500 hover:bg-sky-50 hover:text-sky-700'}
-                `}
-              >
-                {active && (
-                  <span className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-6 bg-sky-600 rounded-r-full" />
-                )}
-                <item.icon className={`w-4.5 h-4.5 flex-shrink-0 ${active ? 'text-sky-600' : 'text-slate-400 group-hover:text-sky-600'}`} style={{ width: 18, height: 18 }} />
-                <span className={`text-sm font-medium truncate ${active ? 'text-sky-600' : ''}`}>{item.label}</span>
-              </div>
-            );
-          })}
-        </nav>
-
-        {/* Logout */}
-        <div className="px-3 py-4 border-t border-sky-100">
+        {/* Log out */}
+        <div style={{ padding: effectivelyCollapsed ? '0 8px 24px' : '0 16px 24px' }}>
           <button
-            className="flex items-center gap-3 px-3 py-2.5 w-full rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-500 transition-all duration-150"
-            onClick={() => {
-              localStorage.removeItem('rehear_token');
-              localStorage.removeItem('rehear_user');
-              window.location.href = 'http://localhost:5173';
+            id="sidebar-logout-btn"
+            onClick={handleLogout}
+            disabled={loggingOut}
+            className="flex items-center w-full transition-all duration-300"
+            style={{
+              gap: effectivelyCollapsed ? '0px' : '10px',
+              padding: effectivelyCollapsed ? '9px 0px' : '9px 10px',
+              borderRadius: '8px',
+              background: 'none',
+              border: 'none',
+              cursor: loggingOut ? 'not-allowed' : 'pointer',
+              opacity: loggingOut ? 0.6 : 1,
+              justifyContent: effectivelyCollapsed ? 'center' : 'flex-start',
             }}
+            onMouseEnter={e => { if (!loggingOut) e.currentTarget.style.backgroundColor = '#fff0f0'; }}
+            onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
           >
-            <LogOut style={{ width: 18, height: 18 }} className="flex-shrink-0" />
-            <span className="text-sm font-medium">Log out</span>
+            {loggingOut ? (
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" style={{ flexShrink: 0, animation: 'spin 1s linear infinite' }}>
+                <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+                <circle cx="12" cy="12" r="9" stroke="#6a7380" strokeWidth="2" strokeDasharray="42" strokeDashoffset="14" strokeLinecap="round" />
+              </svg>
+            ) : (
+              <IconLogout style={{ width: '18px', height: '18px', flexShrink: 0, color: '#6a7380' }} />
+            )}
+            <span 
+              className="font-semibold whitespace-nowrap overflow-hidden transition-all duration-300" 
+              style={{ 
+                fontSize: '14px', 
+                lineHeight: 1.3, 
+                color: '#6a7380',
+                maxWidth: effectivelyCollapsed ? '0px' : '120px',
+                opacity: effectivelyCollapsed ? 0 : 1,
+              }}
+            >
+              {loggingOut ? 'Logging out…' : 'Log out'}
+            </span>
           </button>
         </div>
       </div>
@@ -99,3 +153,4 @@ const Sidebar = ({ currentPage, setCurrentPage }) => {
 };
 
 export default Sidebar;
+
